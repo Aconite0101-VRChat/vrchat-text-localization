@@ -10,6 +10,10 @@ namespace TextLocalization.Editor
         private string _newKeyName = "";
         private const string PREFS_KEY = "TextLocalization.ActiveSettings";
 
+        private bool _isDirty;
+        private double _lastEditTime;
+        private const double SAVE_DEBOUNCE_SECONDS = 1.0;
+
         [MenuItem("VRChat Localization/Localization Editor")]
         public static void ShowWindow()
         {
@@ -38,6 +42,40 @@ namespace TextLocalization.Editor
             {
                 EditorPrefs.SetString(PREFS_KEY, AssetDatabase.GetAssetPath(_settings));
             }
+
+            EditorApplication.update += OnEditorUpdate;
+        }
+
+        private void OnDisable()
+        {
+            SaveIfDirtyImmediate();
+            EditorApplication.update -= OnEditorUpdate;
+        }
+
+        private void OnEditorUpdate()
+        {
+            if (!_isDirty || _settings == null) return;
+
+            if (EditorApplication.timeSinceStartup - _lastEditTime >= SAVE_DEBOUNCE_SECONDS)
+            {
+                SaveIfDirtyImmediate();
+            }
+        }
+
+        private void MarkDirty()
+        {
+            if (_settings == null) return;
+            _isDirty = true;
+            _lastEditTime = EditorApplication.timeSinceStartup;
+            EditorUtility.SetDirty(_settings);
+        }
+
+        private void SaveIfDirtyImmediate()
+        {
+            if (!_isDirty || _settings == null) return;
+            EditorUtility.SetDirty(_settings);
+            AssetDatabase.SaveAssets();
+            _isDirty = false;
         }
 
         private void OnGUI()
@@ -75,6 +113,7 @@ namespace TextLocalization.Editor
             if (so.ApplyModifiedProperties())
             {
                 ValidateDataIntegrity();
+                MarkDirty();
             }
         }
 
@@ -163,6 +202,8 @@ namespace TextLocalization.Editor
                 if (GUILayout.Button("X", GUILayout.Width(25)))
                 {
                     keysProp.DeleteArrayElementAtIndex(i);
+                    MarkDirty();
+                    EditorGUILayout.EndHorizontal();
                     break;
                 }
 
@@ -185,7 +226,7 @@ namespace TextLocalization.Editor
 
             _settings.keys.Add(newKey);
             _newKeyName = "";
-            EditorUtility.SetDirty(_settings);
+            MarkDirty();
         }
 
         private void ValidateDataIntegrity()
