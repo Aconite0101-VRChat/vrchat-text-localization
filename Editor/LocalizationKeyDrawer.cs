@@ -1,13 +1,15 @@
-using UnityEngine;
-using UnityEditor;
+using System;
 using System.Collections.Generic;
-using TextLocalization;
+using UnityEditor;
+using UnityEngine;
 
 namespace TextLocalization.Editor
 {
     [CustomPropertyDrawer(typeof(LocalizationKeyPopupAttribute))]
     public class LocalizationKeyDrawer : PropertyDrawer
     {
+        private const double DebounceSeconds = 1.0;
+
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
         {
             float height = base.GetPropertyHeight(property, label);
@@ -38,6 +40,10 @@ namespace TextLocalization.Editor
             Rect popupRect = position;
             popupRect.height = EditorGUIUtility.singleLineHeight;
 
+            const float addButtonWidth = 70f;
+            Rect buttonRect = new Rect(position.x + position.width - addButtonWidth, popupRect.y, addButtonWidth, popupRect.height);
+            popupRect.width -= (addButtonWidth + EditorGUIUtility.standardVerticalSpacing);
+
             List<string> keyList = new List<string>();
             foreach (var k in settings.keys) keyList.Add(k.key);
 
@@ -59,6 +65,32 @@ namespace TextLocalization.Editor
                 EditorGUI.PropertyField(popupRect, property, label);
             }
 
+            if (GUI.Button(buttonRect, "Add Key"))
+            {
+                UnityEngine.Object targetObject = property.serializedObject.targetObject;
+                string propertyPath = property.propertyPath;
+
+                AddKeyWindow.Show(settings, (enteredName) =>
+                {
+                    if (string.IsNullOrEmpty(enteredName)) return;
+
+                    string created = AddNewKey(settings, enteredName);
+                    if (string.IsNullOrEmpty(created)) return;
+
+                    if (targetObject != null)
+                    {
+                        var so = new SerializedObject(targetObject);
+                        var prop = so.FindProperty(propertyPath);
+                        if (prop != null)
+                        {
+                            prop.stringValue = created;
+                            so.ApplyModifiedProperties();
+                            SyncData(prop, settings, created);
+                        }
+                    }
+                });
+            }
+
             SerializedProperty languagesProp = property.serializedObject.FindProperty("languages");
             if (languagesProp != null && languagesProp.arraySize == 0 && !string.IsNullOrEmpty(property.stringValue))
             {
@@ -73,6 +105,16 @@ namespace TextLocalization.Editor
                     EditorGUI.indentLevel++;
                     float y = position.y + EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
 
+                    SerializedProperty valuesProp = property.serializedObject.FindProperty("values");
+                    if (valuesProp != null)
+                    {
+                        while (valuesProp.arraySize < settings.languages.Count)
+                        {
+                            valuesProp.arraySize++;
+                            valuesProp.GetArrayElementAtIndex(valuesProp.arraySize - 1).stringValue = "";
+                        }
+                    }
+
                     for (int i = 0; i < settings.languages.Count; i++)
                     {
                         Rect langRect = new Rect(position.x, y, position.width, EditorGUIUtility.singleLineHeight);
@@ -80,16 +122,22 @@ namespace TextLocalization.Editor
 
                         while (keyData.values.Count <= i) keyData.values.Add("");
 
-                        string currentVal = keyData.values[i];
+                        string currentVal = GetSerializedValue(property, i) ?? keyData.values[i];
 
                         EditorGUI.BeginChangeCheck();
                         string newVal = EditorGUI.TextField(langRect, lang, currentVal);
                         if (EditorGUI.EndChangeCheck())
                         {
-                            Undo.RecordObject(settings, "Edit Localization Text");
-                            keyData.values[i] = newVal;
-                            EditorUtility.SetDirty(settings);
-                            SyncData(property, settings, property.stringValue);
+                            UnityEngine.Object targetObject = property.serializedObject.targetObject;
+                            Undo.RecordObject(targetObject, "Edit Localization Text");
+                            SetSerializedValue(property, i, newVal);
+
+                            List<string> pendingValues = BuildValuesListFromSerialized(property, settings.languages.Count);
+
+                            DebouncedSaveManager.SetPending(settings, property.stringValue, pendingValues, DebounceSeconds);
+
+                            property.serializedObject.ApplyModifiedProperties();
+                            EditorUtility.SetDirty(targetObject);
                         }
 
                         y += EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
@@ -124,7 +172,40 @@ namespace TextLocalization.Editor
                     valuesProp.GetArrayElementAtIndex(i).stringValue = keyData.values[i];
                 }
 
+                property.serializedObject.ApplyModifiedProperties();
             }
+        }
+
+        private string AddNewKey(LocalizationSettings settings, string baseName)
+        {
+            if (settings == null) return null;
+
+            string candidate = baseName;
+            int suffix = 1;
+            bool exists;
+            do
+            {
+                exists = false;
+                foreach (var k in settings.keys)
+                {
+                    if (k.key == candidate)
+                    {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (exists) candidate = baseName + "_" + suffix++;
+            } while (exists);
+
+            var newKey = new LocalizationKey { key = candidate, values = new List<string>() };
+            for (int i = 0; i < settings.languages.Count; i++) newKey.values.Add(string.Empty);
+
+            Undo.RecordObject(settings, "Add Localization Key");
+            settings.keys.Add(newKey);
+            EditorUtility.SetDirty(settings);
+            AssetDatabase.SaveAssets();
+
+            return candidate;
         }
 
         private LocalizationSettings GetSettings()
@@ -155,6 +236,244 @@ namespace TextLocalization.Editor
                 }
             }
             return null;
+        }
+
+        private static string GetSerializedValue(SerializedProperty property, int index)
+        {
+            var valuesProp = property.serializedObject.FindProperty("values");
+            if (valuesProp == null) return null;
+            if (index < 0 || index >= valuesProp.arraySize) return null;
+            return valuesProp.GetArrayElementAtIndex(index).stringValue;
+        }
+
+        private static void SetSerializedValue(SerializedProperty property, int index, string value)
+        {
+            var valuesProp = property.serializedObject.FindProperty("values");
+            if (valuesProp == null) return;
+            if (index < 0) return;
+            if (index >= valuesProp.arraySize)
+            {
+                valuesProp.arraySize = index + 1;
+            }
+            valuesProp.GetArrayElementAtIndex(index).stringValue = value;
+        }
+
+        private static List<string> BuildValuesListFromSerialized(SerializedProperty property, int targetCount)
+        {
+            var result = new List<string>(targetCount);
+            var valuesProp = property.serializedObject.FindProperty("values");
+            if (valuesProp != null)
+            {
+                for (int i = 0; i < targetCount; i++)
+                {
+                    if (i < valuesProp.arraySize)
+                        result.Add(valuesProp.GetArrayElementAtIndex(i).stringValue);
+                    else
+                        result.Add(string.Empty);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < targetCount; i++) result.Add(string.Empty);
+            }
+            return result;
+        }
+
+        private static class DebouncedSaveManager
+        {
+            private class Pending
+            {
+                public LocalizationSettings Settings;
+                public string Key;
+                public List<string> Values;
+                public double LastEditTime;
+            }
+
+            private static readonly Dictionary<string, Pending> s_pending = new Dictionary<string, Pending>();
+            private static bool s_registered = false;
+
+            private static string MakeId(LocalizationSettings settings, string key)
+            {
+                return settings.GetInstanceID() + ":" + key;
+            }
+
+            public static void SetPending(LocalizationSettings settings, string key, List<string> values, double debounceSeconds)
+            {
+                if (settings == null || string.IsNullOrEmpty(key)) return;
+
+                string id = MakeId(settings, key);
+                Pending p;
+                if (!s_pending.TryGetValue(id, out p))
+                {
+                    p = new Pending { Settings = settings, Key = key, Values = new List<string>(values), LastEditTime = EditorApplication.timeSinceStartup };
+                    s_pending[id] = p;
+                }
+                else
+                {
+                    p.Values = new List<string>(values);
+                    p.LastEditTime = EditorApplication.timeSinceStartup;
+                }
+
+                EnsureRegistered();
+            }
+
+            private static void EnsureRegistered()
+            {
+                if (s_registered) return;
+                EditorApplication.update += OnUpdate;
+                Selection.selectionChanged += OnSelectionChanged;
+                EditorApplication.quitting += OnEditorQuitting;
+                s_registered = true;
+            }
+
+            private static void UnregisterIfEmpty()
+            {
+                if (s_pending.Count == 0 && s_registered)
+                {
+                    EditorApplication.update -= OnUpdate;
+                    Selection.selectionChanged -= OnSelectionChanged;
+                    EditorApplication.quitting -= OnEditorQuitting;
+                    s_registered = false;
+                }
+            }
+
+            private static void OnUpdate()
+            {
+                double now = EditorApplication.timeSinceStartup;
+                var toFlush = new List<string>();
+                foreach (var kv in s_pending)
+                {
+                    if (now - kv.Value.LastEditTime >= DebounceSeconds)
+                    {
+                        toFlush.Add(kv.Key);
+                    }
+                }
+
+                foreach (var id in toFlush)
+                {
+                    Flush(id);
+                }
+
+                UnregisterIfEmpty();
+            }
+
+            private static void OnSelectionChanged()
+            {
+                FlushAll();
+            }
+
+            private static void OnEditorQuitting()
+            {
+                FlushAll();
+            }
+
+            private static void FlushAll()
+            {
+                var keys = new List<string>(s_pending.Keys);
+                foreach (var id in keys) Flush(id);
+                UnregisterIfEmpty();
+            }
+
+            private static void Flush(string id)
+            {
+                if (!s_pending.TryGetValue(id, out var p)) return;
+
+                var settings = p.Settings;
+                var key = p.Key;
+                var values = p.Values;
+
+                if (settings != null)
+                {
+                    LocalizationKey keyData = null;
+                    foreach (var k in settings.keys)
+                    {
+                        if (k.key == key)
+                        {
+                            keyData = k;
+                            break;
+                        }
+                    }
+
+                    if (keyData != null)
+                    {
+                        Undo.RecordObject(settings, "Edit Localization Text");
+                        // Replace keyData values with pending values (preserve list size)
+                        keyData.values.Clear();
+                        for (int i = 0; i < values.Count; i++) keyData.values.Add(values[i]);
+
+                        EditorUtility.SetDirty(settings);
+                        AssetDatabase.SaveAssets();
+                    }
+                }
+
+                s_pending.Remove(id);
+            }
+        }
+
+        private class AddKeyWindow : EditorWindow
+        {
+            private string _name = "NEW_KEY";
+            private LocalizationSettings _settings;
+            private Action<string> _onConfirm;
+            private string _validationMessage;
+
+            public static void Show(LocalizationSettings settings, Action<string> onConfirm)
+            {
+                var wnd = CreateInstance<AddKeyWindow>();
+                wnd.titleContent = new GUIContent("Add Localization Key");
+                wnd._settings = settings;
+                wnd._onConfirm = onConfirm;
+                wnd.position = new Rect(Screen.width / 2f - 150f, Screen.height / 2f - 50f, 300f, 90f);
+                wnd.ShowUtility();
+            }
+
+            private void OnGUI()
+            {
+                EditorGUILayout.LabelField("New key name", EditorStyles.boldLabel);
+                EditorGUI.BeginChangeCheck();
+                _name = EditorGUILayout.TextField(_name);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    _validationMessage = ValidateName(_name);
+                }
+
+                if (!string.IsNullOrEmpty(_validationMessage))
+                {
+                    EditorGUILayout.HelpBox(_validationMessage, MessageType.Warning);
+                }
+
+                GUILayout.FlexibleSpace();
+
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("Create"))
+                {
+                    _validationMessage = ValidateName(_name);
+                    if (string.IsNullOrEmpty(_validationMessage))
+                    {
+                        _onConfirm?.Invoke(_name);
+                        Close();
+                    }
+                }
+
+                if (GUILayout.Button("Cancel"))
+                {
+                    Close();
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+
+            private string ValidateName(string name)
+            {
+                if (string.IsNullOrEmpty(name)) return "Name cannot be empty.";
+                if (_settings != null)
+                {
+                    foreach (var k in _settings.keys)
+                    {
+                        if (k.key == name) return "A key with this name already exists.";
+                    }
+                }
+                return null;
+            }
         }
     }
 }
