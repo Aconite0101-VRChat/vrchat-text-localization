@@ -1,0 +1,22 @@
+{
+    "name": "TextLocalization.Editor",
+    "rootNamespace": "TextLocalization.Editor",
+    "references": [
+        "VRC.SDK3.Editor",
+        "VRC.SDKBase.Editor",
+        "VRC.Udon.Editor",
+        "UdonSharp.Editor",
+        "TextLocalization"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
