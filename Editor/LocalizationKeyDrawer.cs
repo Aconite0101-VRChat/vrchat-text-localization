@@ -2,13 +2,53 @@ using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
+using Object = UnityEngine.Object;
+using VRCLocalization;
 
-namespace TextLocalization.Editor
+namespace VRCLocalization.Editor
 {
     [CustomPropertyDrawer(typeof(LocalizationKeyPopupAttribute))]
     public class LocalizationKeyDrawer : PropertyDrawer
     {
         private const double DebounceSeconds = 1.0;
+
+        private Type GetTypeForLocalizationEnum(LocalizationValueType type)
+        {
+            switch (type)
+            {
+                case LocalizationValueType.AudioClip:
+                    return typeof(AudioClip);
+                case LocalizationValueType.Texture:
+                    return typeof(Texture);
+                case LocalizationValueType.Sprite:
+                    return typeof(Sprite);
+                case LocalizationValueType.Prefab:
+                    return typeof(GameObject);
+                default:
+                    return typeof(Object);
+            }
+        }
+
+        private string GetValuesPropName()
+        {
+            var attr = attribute as LocalizationKeyPopupAttribute;
+            return attr?.ValuesFieldName ?? "values";
+        }
+
+        private LocalizationValueType? GetFilterType(SerializedProperty property)
+        {
+            var valuesProp = property.serializedObject.FindProperty(GetValuesPropName());
+            if (valuesProp == null || !valuesProp.isArray) return null;
+
+            string type = valuesProp.arrayElementType;
+            if (type == "string") return LocalizationValueType.String;
+            if (type.Contains("AudioClip")) return LocalizationValueType.AudioClip;
+            if (type.Contains("Texture")) return LocalizationValueType.Texture;
+            if (type.Contains("Sprite")) return LocalizationValueType.Sprite;
+            if (type.Contains("GameObject")) return LocalizationValueType.Prefab;
+
+            return null;
+        }
 
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
         {
@@ -44,8 +84,13 @@ namespace TextLocalization.Editor
             Rect buttonRect = new Rect(position.x + position.width - addButtonWidth, popupRect.y, addButtonWidth, popupRect.height);
             popupRect.width -= (addButtonWidth + EditorGUIUtility.standardVerticalSpacing);
 
+            LocalizationValueType? filterType = GetFilterType(property);
             List<string> keyList = new List<string>();
-            foreach (var k in settings.keys) keyList.Add(k.key);
+            foreach (var k in settings.keys)
+            {
+                if (filterType.HasValue && k.valueType != filterType.Value) continue;
+                keyList.Add(k.key);
+            }
 
             int index = keyList.IndexOf(property.stringValue);
 
@@ -74,7 +119,7 @@ namespace TextLocalization.Editor
                 {
                     if (string.IsNullOrEmpty(enteredName)) return;
 
-                    string created = AddNewKey(settings, enteredName);
+                    string created = AddNewKey(settings, enteredName, filterType ?? LocalizationValueType.String);
                     if (string.IsNullOrEmpty(created)) return;
 
                     if (targetObject != null)
@@ -105,7 +150,7 @@ namespace TextLocalization.Editor
                     EditorGUI.indentLevel++;
                     float y = position.y + EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
 
-                    SerializedProperty valuesProp = property.serializedObject.FindProperty("values");
+                    SerializedProperty valuesProp = property.serializedObject.FindProperty(GetValuesPropName());
                     if (valuesProp != null)
                     {
                         while (valuesProp.arraySize < settings.languages.Count)
@@ -115,32 +160,72 @@ namespace TextLocalization.Editor
                         }
                     }
 
-                    for (int i = 0; i < settings.languages.Count; i++)
+                    var valuesPropOnComponent = property.serializedObject.FindProperty(GetValuesPropName());
+                    bool isStringComponent = valuesPropOnComponent.arrayElementType == "string";
+                    bool isStringInDb = keyData.valueType == LocalizationValueType.String;
+
+                    if (isStringComponent != isStringInDb)
                     {
-                        Rect langRect = new Rect(position.x, y, position.width, EditorGUIUtility.singleLineHeight);
-                        string lang = settings.languages[i];
-
-                        while (keyData.values.Count <= i) keyData.values.Add("");
-
-                        string currentVal = GetSerializedValue(property, i) ?? keyData.values[i];
-
-                        EditorGUI.BeginChangeCheck();
-                        string newVal = EditorGUI.TextField(langRect, lang, currentVal);
-                        if (EditorGUI.EndChangeCheck())
+                        Rect helpBoxRect = new Rect(position.x, y, position.width, EditorGUIUtility.singleLineHeight * 2);
+                        EditorGUI.HelpBox(helpBoxRect, "The selected key's type does not match the component's value type.", MessageType.Error);
+                        y += EditorGUIUtility.singleLineHeight * 2 + EditorGUIUtility.standardVerticalSpacing;
+                    }
+                    else if (isStringComponent)
+                    {
+                        for (int i = 0; i < settings.languages.Count; i++)
                         {
-                            UnityEngine.Object targetObject = property.serializedObject.targetObject;
-                            Undo.RecordObject(targetObject, "Edit Localization Text");
-                            SetSerializedValue(property, i, newVal);
+                            Rect langRect = new Rect(position.x, y, position.width, EditorGUIUtility.singleLineHeight);
+                            string lang = settings.languages[i];
 
-                            List<string> pendingValues = BuildValuesListFromSerialized(property, settings.languages.Count);
+                            while (keyData.stringValues.Count <= i) keyData.stringValues.Add("");
 
-                            DebouncedSaveManager.SetPending(settings, property.stringValue, pendingValues, DebounceSeconds);
+                            string currentVal = GetSerializedStringValue(property, i, GetValuesPropName()) ?? keyData.stringValues[i];
 
-                            property.serializedObject.ApplyModifiedProperties();
-                            EditorUtility.SetDirty(targetObject);
+                            EditorGUI.BeginChangeCheck();
+                            string newVal = EditorGUI.TextField(langRect, lang, currentVal);
+                            if (EditorGUI.EndChangeCheck())
+                            {
+                                Object targetObject = property.serializedObject.targetObject;
+                                Undo.RecordObject(targetObject, "Edit Localization Text");
+                                SetSerializedStringValue(property, i, newVal, GetValuesPropName());
+
+                                List<string> pendingValues = BuildStringValuesListFromSerialized(property, settings.languages.Count, GetValuesPropName());
+                                DebouncedSaveManager.SetPending(settings, property.stringValue, pendingValues, DebounceSeconds);
+
+                                property.serializedObject.ApplyModifiedProperties();
+                                EditorUtility.SetDirty(targetObject);
+                            }
+                            y += EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
                         }
+                    }
+                    else // Object type
+                    {
+                        for (int i = 0; i < settings.languages.Count; i++)
+                        {
+                            Rect langRect = new Rect(position.x, y, position.width, EditorGUIUtility.singleLineHeight);
+                            string lang = settings.languages[i];
 
-                        y += EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
+                            while (keyData.objectValues.Count <= i) keyData.objectValues.Add(null);
+
+                            Object currentVal = GetSerializedObjectValue(property, i, GetValuesPropName()) ?? keyData.objectValues[i];
+
+                            EditorGUI.BeginChangeCheck();
+                            Type objectType = GetTypeForLocalizationEnum(keyData.valueType);
+                            Object newVal = EditorGUI.ObjectField(langRect, lang, currentVal, objectType, false);
+                            if (EditorGUI.EndChangeCheck())
+                            {
+                                Object targetObject = property.serializedObject.targetObject;
+                                Undo.RecordObject(targetObject, "Edit Localization Value");
+                                SetSerializedObjectValue(property, i, newVal, GetValuesPropName());
+
+                                List<Object> pendingValues = BuildObjectValuesListFromSerialized(property, settings.languages.Count, GetValuesPropName());
+                                DebouncedSaveManager.SetPending(settings, property.stringValue, pendingValues, DebounceSeconds);
+
+                                property.serializedObject.ApplyModifiedProperties();
+                                EditorUtility.SetDirty(targetObject);
+                            }
+                            y += EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
+                        }
                     }
                     EditorGUI.indentLevel--;
                 }
@@ -150,7 +235,7 @@ namespace TextLocalization.Editor
         private void SyncData(SerializedProperty property, LocalizationSettings settings, string key)
         {
             SerializedProperty languagesProp = property.serializedObject.FindProperty("languages");
-            SerializedProperty valuesProp = property.serializedObject.FindProperty("values");
+            SerializedProperty valuesProp = property.serializedObject.FindProperty(GetValuesPropName());
 
             if (languagesProp == null || valuesProp == null) return;
 
@@ -165,18 +250,31 @@ namespace TextLocalization.Editor
                     languagesProp.GetArrayElementAtIndex(i).stringValue = settings.languages[i];
                 }
 
-                valuesProp.ClearArray();
-                valuesProp.arraySize = keyData.values.Count;
-                for (int i = 0; i < keyData.values.Count; i++)
+                bool isStringArray = valuesProp.arrayElementType == "string";
+                if (isStringArray && keyData.valueType == LocalizationValueType.String)
                 {
-                    valuesProp.GetArrayElementAtIndex(i).stringValue = keyData.values[i];
+                    valuesProp.ClearArray();
+                    valuesProp.arraySize = keyData.stringValues.Count;
+                    for (int i = 0; i < keyData.stringValues.Count; i++)
+                    {
+                        valuesProp.GetArrayElementAtIndex(i).stringValue = keyData.stringValues[i];
+                    }
+                }
+                else if (!isStringArray && keyData.valueType != LocalizationValueType.String)
+                {
+                    valuesProp.ClearArray();
+                    valuesProp.arraySize = keyData.objectValues.Count;
+                    for (int i = 0; i < keyData.objectValues.Count; i++)
+                    {
+                        valuesProp.GetArrayElementAtIndex(i).objectReferenceValue = keyData.objectValues[i];
+                    }
                 }
 
                 property.serializedObject.ApplyModifiedProperties();
             }
         }
 
-        private string AddNewKey(LocalizationSettings settings, string baseName)
+        private string AddNewKey(LocalizationSettings settings, string baseName, LocalizationValueType type)
         {
             if (settings == null) return null;
 
@@ -197,8 +295,12 @@ namespace TextLocalization.Editor
                 if (exists) candidate = baseName + "_" + suffix++;
             } while (exists);
 
-            var newKey = new LocalizationKey { key = candidate, values = new List<string>() };
-            for (int i = 0; i < settings.languages.Count; i++) newKey.values.Add(string.Empty);
+            var newKey = new LocalizationKey { key = candidate, valueType = type };
+            for (int i = 0; i < settings.languages.Count; i++)
+            {
+                newKey.stringValues.Add(string.Empty);
+                newKey.objectValues.Add(null);
+            }
 
             Undo.RecordObject(settings, "Add Localization Key");
             settings.keys.Add(newKey);
@@ -210,20 +312,8 @@ namespace TextLocalization.Editor
 
         private LocalizationSettings GetSettings()
         {
-            string lastPath = EditorPrefs.GetString("TextLocalization.ActiveSettings", "");
-            if (!string.IsNullOrEmpty(lastPath))
-            {
-                var settings = AssetDatabase.LoadAssetAtPath<LocalizationSettings>(lastPath);
-                if (settings != null) return settings;
-            }
-
-            string[] guids = AssetDatabase.FindAssets("t:LocalizationSettings");
-            if (guids.Length > 0)
-            {
-                string path = AssetDatabase.GUIDToAssetPath(guids[0]);
-                return AssetDatabase.LoadAssetAtPath<LocalizationSettings>(path);
-            }
-            return null;
+            var descriptor = UnityEngine.Object.FindObjectOfType<VRCSceneLocalizationDescriptor>();
+            return descriptor != null ? (LocalizationSettings)descriptor.settings : null;
         }
 
         private LocalizationKey GetKeyData(LocalizationSettings settings, string key)
@@ -238,18 +328,18 @@ namespace TextLocalization.Editor
             return null;
         }
 
-        private static string GetSerializedValue(SerializedProperty property, int index)
+        private static string GetSerializedStringValue(SerializedProperty property, int index, string valuesPropName)
         {
-            var valuesProp = property.serializedObject.FindProperty("values");
-            if (valuesProp == null) return null;
+            var valuesProp = property.serializedObject.FindProperty(valuesPropName);
+            if (valuesProp == null || !valuesProp.isArray) return null;
             if (index < 0 || index >= valuesProp.arraySize) return null;
             return valuesProp.GetArrayElementAtIndex(index).stringValue;
         }
 
-        private static void SetSerializedValue(SerializedProperty property, int index, string value)
+        private static void SetSerializedStringValue(SerializedProperty property, int index, string value, string valuesPropName)
         {
-            var valuesProp = property.serializedObject.FindProperty("values");
-            if (valuesProp == null) return;
+            var valuesProp = property.serializedObject.FindProperty(valuesPropName);
+            if (valuesProp == null || !valuesProp.isArray) return;
             if (index < 0) return;
             if (index >= valuesProp.arraySize)
             {
@@ -258,11 +348,31 @@ namespace TextLocalization.Editor
             valuesProp.GetArrayElementAtIndex(index).stringValue = value;
         }
 
-        private static List<string> BuildValuesListFromSerialized(SerializedProperty property, int targetCount)
+        private static Object GetSerializedObjectValue(SerializedProperty property, int index, string valuesPropName)
+        {
+            var valuesProp = property.serializedObject.FindProperty(valuesPropName);
+            if (valuesProp == null || !valuesProp.isArray) return null;
+            if (index < 0 || index >= valuesProp.arraySize) return null;
+            return valuesProp.GetArrayElementAtIndex(index).objectReferenceValue;
+        }
+
+        private static void SetSerializedObjectValue(SerializedProperty property, int index, Object value, string valuesPropName)
+        {
+            var valuesProp = property.serializedObject.FindProperty(valuesPropName);
+            if (valuesProp == null || !valuesProp.isArray) return;
+            if (index < 0) return;
+            if (index >= valuesProp.arraySize)
+            {
+                valuesProp.arraySize = index + 1;
+            }
+            valuesProp.GetArrayElementAtIndex(index).objectReferenceValue = value;
+        }
+
+        private static List<string> BuildStringValuesListFromSerialized(SerializedProperty property, int targetCount, string valuesPropName)
         {
             var result = new List<string>(targetCount);
-            var valuesProp = property.serializedObject.FindProperty("values");
-            if (valuesProp != null)
+            var valuesProp = property.serializedObject.FindProperty(valuesPropName);
+            if (valuesProp != null && valuesProp.isArray)
             {
                 for (int i = 0; i < targetCount; i++)
                 {
@@ -279,13 +389,34 @@ namespace TextLocalization.Editor
             return result;
         }
 
+        private static List<Object> BuildObjectValuesListFromSerialized(SerializedProperty property, int targetCount, string valuesPropName)
+        {
+            var result = new List<Object>(targetCount);
+            var valuesProp = property.serializedObject.FindProperty(valuesPropName);
+            if (valuesProp != null && valuesProp.isArray)
+            {
+                for (int i = 0; i < targetCount; i++)
+                {
+                    if (i < valuesProp.arraySize)
+                        result.Add(valuesProp.GetArrayElementAtIndex(i).objectReferenceValue);
+                    else
+                        result.Add(null);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < targetCount; i++) result.Add(null);
+            }
+            return result;
+        }
+
         private static class DebouncedSaveManager
         {
             private class Pending
             {
                 public LocalizationSettings Settings;
                 public string Key;
-                public List<string> Values;
+                public object Values;
                 public double LastEditTime;
             }
 
@@ -297,7 +428,7 @@ namespace TextLocalization.Editor
                 return settings.GetInstanceID() + ":" + key;
             }
 
-            public static void SetPending(LocalizationSettings settings, string key, List<string> values, double debounceSeconds)
+            public static void SetPending(LocalizationSettings settings, string key, object values, double debounceSeconds)
             {
                 if (settings == null || string.IsNullOrEmpty(key)) return;
 
@@ -305,12 +436,12 @@ namespace TextLocalization.Editor
                 Pending p;
                 if (!s_pending.TryGetValue(id, out p))
                 {
-                    p = new Pending { Settings = settings, Key = key, Values = new List<string>(values), LastEditTime = EditorApplication.timeSinceStartup };
+                    p = new Pending { Settings = settings, Key = key, Values = values, LastEditTime = EditorApplication.timeSinceStartup };
                     s_pending[id] = p;
                 }
                 else
                 {
-                    p.Values = new List<string>(values);
+                    p.Values = values;
                     p.LastEditTime = EditorApplication.timeSinceStartup;
                 }
 
@@ -397,12 +528,20 @@ namespace TextLocalization.Editor
                     if (keyData != null)
                     {
                         Undo.RecordObject(settings, "Edit Localization Text");
-                        // Replace keyData values with pending values (preserve list size)
-                        keyData.values.Clear();
-                        for (int i = 0; i < values.Count; i++) keyData.values.Add(values[i]);
-
-                        EditorUtility.SetDirty(settings);
-                        AssetDatabase.SaveAssets();
+                        if (values is List<string> stringValues)
+                        {
+                            keyData.stringValues.Clear();
+                            keyData.stringValues.AddRange(stringValues);
+                            EditorUtility.SetDirty(settings);
+                            AssetDatabase.SaveAssets();
+                        }
+                        else if (values is List<Object> objectValues)
+                        {
+                            keyData.objectValues.Clear();
+                            keyData.objectValues.AddRange(objectValues);
+                            EditorUtility.SetDirty(settings);
+                            AssetDatabase.SaveAssets();
+                        }
                     }
                 }
 

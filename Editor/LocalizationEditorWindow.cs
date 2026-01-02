@@ -1,18 +1,23 @@
-using UnityEngine;
+using System;
+using System.Collections.Generic;
 using UnityEditor;
+using UnityEngine;
+using VRCLocalization;
 
-namespace TextLocalization.Editor
+namespace VRCLocalization.Editor
 {
     public class LocalizationEditorWindow : EditorWindow
     {
         private LocalizationSettings _settings;
         private Vector2 _scrollPos;
         private string _newKeyName = "";
-        private const string PREFS_KEY = "TextLocalization.ActiveSettings";
 
         private bool _isDirty;
         private double _lastEditTime;
         private const double SAVE_DEBOUNCE_SECONDS = 1.0;
+        private int _selectedTab = 0;
+        private readonly string[] _tabNames = Enum.GetNames(typeof(LocalizationValueType));
+        private string _searchQuery = "";
 
         [MenuItem("VRChat Localization/Localization Editor")]
         public static void ShowWindow()
@@ -22,27 +27,6 @@ namespace TextLocalization.Editor
 
         private void OnEnable()
         {
-            string lastPath = EditorPrefs.GetString(PREFS_KEY, "");
-            if (!string.IsNullOrEmpty(lastPath))
-            {
-                _settings = AssetDatabase.LoadAssetAtPath<LocalizationSettings>(lastPath);
-            }
-
-            if (_settings == null)
-            {
-                string[] guids = AssetDatabase.FindAssets("t:LocalizationSettings");
-                if (guids.Length > 0)
-                {
-                    string path = AssetDatabase.GUIDToAssetPath(guids[0]);
-                    _settings = AssetDatabase.LoadAssetAtPath<LocalizationSettings>(path);
-                }
-            }
-
-            if (_settings != null)
-            {
-                EditorPrefs.SetString(PREFS_KEY, AssetDatabase.GetAssetPath(_settings));
-            }
-
             EditorApplication.update += OnEditorUpdate;
         }
 
@@ -81,20 +65,29 @@ namespace TextLocalization.Editor
         private void OnGUI()
         {
             EditorGUILayout.Space();
-            EditorGUI.BeginChangeCheck();
-            _settings = (LocalizationSettings)EditorGUILayout.ObjectField("Active Database", _settings, typeof(LocalizationSettings), false);
-            if (EditorGUI.EndChangeCheck())
+
+            var descriptor = FindObjectOfType<VRCSceneLocalizationDescriptor>();
+            if (descriptor == null)
             {
-                if (_settings != null)
+                EditorGUILayout.HelpBox("VRCSceneLocalizationDescriptor not found in the scene.", MessageType.Warning);
+                if (GUILayout.Button("Create Descriptor"))
                 {
-                    EditorPrefs.SetString(PREFS_KEY, AssetDatabase.GetAssetPath(_settings));
+                    new GameObject("VRCSceneLocalizationDescriptor").AddComponent<VRCSceneLocalizationDescriptor>();
                 }
-                else
-                {
-                    EditorPrefs.DeleteKey(PREFS_KEY);
-                }
+                _settings = null;
+                return;
             }
 
+            EditorGUI.BeginChangeCheck();
+            var newSettings = (LocalizationSettings)EditorGUILayout.ObjectField("Active Database", descriptor.settings, typeof(LocalizationSettings), false);
+            if (EditorGUI.EndChangeCheck())
+            {
+                Undo.RecordObject(descriptor, "Change Localization Settings");
+                descriptor.settings = newSettings;
+                EditorUtility.SetDirty(descriptor);
+            }
+
+            _settings = (LocalizationSettings)descriptor.settings;
             if (_settings == null)
             {
                 DrawNoSettingsUI();
@@ -136,8 +129,14 @@ namespace TextLocalization.Editor
             {
                 AssetDatabase.CreateAsset(asset, path);
                 AssetDatabase.SaveAssets();
-                _settings = asset;
-                EditorPrefs.SetString(PREFS_KEY, path);
+                
+                var descriptor = FindObjectOfType<VRCSceneLocalizationDescriptor>();
+                if (descriptor != null)
+                {
+                    Undo.RecordObject(descriptor, "Assign Localization Settings");
+                    descriptor.settings = asset;
+                    EditorUtility.SetDirty(descriptor);
+                }
             }
         }
 
@@ -152,9 +151,34 @@ namespace TextLocalization.Editor
             EditorGUILayout.EndVertical();
         }
 
+        private Type GetTypeForLocalizationEnum(LocalizationValueType type)
+        {
+            switch (type)
+            {
+                case LocalizationValueType.AudioClip:
+                    return typeof(AudioClip);
+                case LocalizationValueType.Texture:
+                    return typeof(Texture);
+                case LocalizationValueType.Sprite:
+                    return typeof(Sprite);
+                case LocalizationValueType.Prefab:
+                    return typeof(GameObject);
+                default:
+                    return typeof(UnityEngine.Object);
+            }
+        }
+
         private void DrawTable(SerializedObject so)
         {
             EditorGUILayout.LabelField("Translations", EditorStyles.boldLabel);
+
+            EditorGUI.BeginChangeCheck();
+            _selectedTab = GUILayout.Toolbar(_selectedTab, _tabNames);
+            if (EditorGUI.EndChangeCheck())
+            {
+                _scrollPos = Vector2.zero;
+            }
+            EditorGUILayout.Space();
 
             EditorGUILayout.BeginHorizontal();
             _newKeyName = EditorGUILayout.TextField("New Key Name", _newKeyName);
@@ -164,10 +188,12 @@ namespace TextLocalization.Editor
             }
             EditorGUILayout.EndHorizontal();
 
+            _searchQuery = EditorGUILayout.TextField("Search", _searchQuery);
+
             EditorGUILayout.Space();
 
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-            EditorGUILayout.LabelField("Key", GUILayout.Width(150));
+            EditorGUILayout.LabelField("Key", GUILayout.Width(200));
             for (int i = 0; i < _settings.languages.Count; i++)
             {
                 EditorGUILayout.LabelField(_settings.languages[i], GUILayout.MinWidth(100));
@@ -178,24 +204,61 @@ namespace TextLocalization.Editor
             _scrollPos = EditorGUILayout.BeginScrollView(_scrollPos);
             SerializedProperty keysProp = so.FindProperty("keys");
 
+            List<int> indices = new List<int>();
             for (int i = 0; i < keysProp.arraySize; i++)
             {
                 SerializedProperty keyItem = keysProp.GetArrayElementAtIndex(i);
                 SerializedProperty keyName = keyItem.FindPropertyRelative("key");
-                SerializedProperty values = keyItem.FindPropertyRelative("values");
+                SerializedProperty valueTypeProp = keyItem.FindPropertyRelative("valueType");
 
-                while (values.arraySize < _settings.languages.Count) values.InsertArrayElementAtIndex(values.arraySize);
+                if (valueTypeProp.enumValueIndex != _selectedTab) continue;
+
+                if (!string.IsNullOrEmpty(_searchQuery) && keyName.stringValue.IndexOf(_searchQuery, StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+
+                indices.Add(i);
+            }
+            indices.Sort((a, b) => string.Compare(keysProp.GetArrayElementAtIndex(a).FindPropertyRelative("key").stringValue, keysProp.GetArrayElementAtIndex(b).FindPropertyRelative("key").stringValue, StringComparison.OrdinalIgnoreCase));
+
+
+            foreach (int i in indices)
+            {
+                SerializedProperty keyItem = keysProp.GetArrayElementAtIndex(i);
+                SerializedProperty keyName = keyItem.FindPropertyRelative("key");
+                SerializedProperty valueTypeProp = keyItem.FindPropertyRelative("valueType");
+
+                var valueType = (LocalizationValueType)valueTypeProp.enumValueIndex;
+
+                SerializedProperty valuesProp;
+                if (valueType == LocalizationValueType.String)
+                {
+                    valuesProp = keyItem.FindPropertyRelative("stringValues");
+                }
+                else
+                {
+                    valuesProp = keyItem.FindPropertyRelative("objectValues");
+                }
+
+                while (valuesProp.arraySize < _settings.languages.Count) valuesProp.InsertArrayElementAtIndex(valuesProp.arraySize);
 
                 EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
 
-                EditorGUILayout.PropertyField(keyName, GUIContent.none, GUILayout.Width(150));
+                EditorGUILayout.PropertyField(keyName, GUIContent.none, GUILayout.Width(200));
 
                 for (int l = 0; l < _settings.languages.Count; l++)
                 {
-                    if (l < values.arraySize)
+                    if (l < valuesProp.arraySize)
                     {
-                        SerializedProperty valueProp = values.GetArrayElementAtIndex(l);
-                        EditorGUILayout.PropertyField(valueProp, GUIContent.none, GUILayout.MinWidth(100));
+                        SerializedProperty valueProp = valuesProp.GetArrayElementAtIndex(l);
+                        if (valueType == LocalizationValueType.String)
+                        {
+                            EditorGUILayout.PropertyField(valueProp, GUIContent.none, GUILayout.MinWidth(100));
+                        }
+                        else
+                        {
+                            Type objectType = GetTypeForLocalizationEnum(valueType);
+                            valueProp.objectReferenceValue = EditorGUILayout.ObjectField(valueProp.objectReferenceValue, objectType, false, GUILayout.MinWidth(100));
+                        }
                     }
                 }
 
@@ -221,8 +284,13 @@ namespace TextLocalization.Editor
 
             LocalizationKey newKey = new LocalizationKey();
             newKey.key = _newKeyName.ToUpper().Replace(" ", "_");
+            newKey.valueType = (LocalizationValueType)_selectedTab;
 
-            foreach (var lang in _settings.languages) newKey.values.Add("");
+            for (int i = 0; i < _settings.languages.Count; i++)
+            {
+                newKey.stringValues.Add("");
+                newKey.objectValues.Add(null);
+            }
 
             _settings.keys.Add(newKey);
             _newKeyName = "";
@@ -231,7 +299,15 @@ namespace TextLocalization.Editor
 
         private void ValidateDataIntegrity()
         {
-            // Logic to ensure all keys have the correct number of value entries matching languages count
+            if (_settings == null) return;
+
+            foreach (var key in _settings.keys)
+            {
+                while (key.stringValues.Count < _settings.languages.Count) key.stringValues.Add("");
+                while (key.stringValues.Count > _settings.languages.Count) key.stringValues.RemoveAt(key.stringValues.Count - 1);
+                while (key.objectValues.Count < _settings.languages.Count) key.objectValues.Add(null);
+                while (key.objectValues.Count > _settings.languages.Count) key.objectValues.RemoveAt(key.objectValues.Count - 1);
+            }
         }
     }
 }
