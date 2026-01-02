@@ -1,0 +1,79 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8b0b820a36f68694ebca51414ea34d09, type: 3}
+  m_Name: SampleLocalizationSettings
+  m_EditorClassIdentifier: 
+  languages:
+  - en
+  - ja
+  - th
+  keys:
+  - key: SAMPLE_STRING
+    valueType: 0
+    stringValues:
+    - English
+    - "\u65E5\u672C\u8A9E"
+    - "\u0E20\u0E32\u0E29\u0E32\u0E44\u0E17\u0E22"
+    objectValues:
+    - {fileID: 0}
+    - {fileID: 0}
+    - {fileID: 0}
+  - key: SAMPLE_AUDIO
+    valueType: 1
+    stringValues:
+    - 
+    - 
+    - 
+    objectValues:
+    - {fileID: 8300000, guid: fc53eb91254b255449f48563c89ddc57, type: 3}
+    - {fileID: 8300000, guid: 39f0a3ddb2429ae438f85975799504c7, type: 3}
+    - {fileID: 8300000, guid: 28b5af699bedfa64fa62f2170f0099ac, type: 3}
+  - key: SAMPLE_TEXTURE
+    valueType: 2
+    stringValues:
+    - 
+    - 
+    - 
+    objectValues:
+    - {fileID: 2800000, guid: dc7320dea2fd87e489c39b2eaebdb700, type: 3}
+    - {fileID: 2800000, guid: db31173947d97f8498f83eee62cd094b, type: 3}
+    - {fileID: 2800000, guid: 17bfb400a0186d94aa9f10ed314a3cb3, type: 3}
+  - key: SAMPLE_SPRITE
+    valueType: 3
+    stringValues:
+    - 
+    - 
+    - 
+    objectValues:
+    - {fileID: 21300000, guid: bf5014aaf19c5f443909e99486601ae1, type: 3}
+    - {fileID: 21300000, guid: fcc9f6f0aea3af742ab350fb847c9e69, type: 3}
+    - {fileID: 21300000, guid: 1181949864a933b41b10c541e71005ab, type: 3}
+  - key: SAMPLE_PREFAB
+    valueType: 4
+    stringValues:
+    - 
+    - 
+    - 
+    objectValues:
+    - {fileID: 0}
+    - {fileID: 0}
+    - {fileID: 0}
+  - key: SAMPLE_STRING_1
+    valueType: 0
+    stringValues:
+    - 3N6L15H
+    - N1H0N60
+    - P4S47H41
+    objectValues:
+    - {fileID: 0}
+    - {fileID: 0}
+    - {fileID: 0}
