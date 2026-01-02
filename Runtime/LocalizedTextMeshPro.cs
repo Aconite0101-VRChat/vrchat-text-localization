@@ -2,7 +2,7 @@
 using TMPro;
 using UnityEngine;
 
-namespace TextLocalization
+namespace VRCLocalization
 {
     [RequireComponent(typeof(TextMeshPro))]
     public class LocalizedTextMeshPro : LocalizedText

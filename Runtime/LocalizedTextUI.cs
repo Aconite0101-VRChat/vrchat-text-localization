@@ -2,7 +2,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace TextLocalization
+namespace VRCLocalization
 {
     [RequireComponent(typeof(Text))]
     public class LocalizedTextUI : LocalizedText
