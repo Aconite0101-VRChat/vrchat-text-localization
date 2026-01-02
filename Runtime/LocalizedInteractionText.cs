@@ -1,9 +1,6 @@
 ﻿
-
-using System.Linq;
 using UdonSharp;
-using UnityEngine;
-using VRC.SDK3.Components;
+using VRC.Udon;
 
 namespace VRCLocalization
 {
@@ -11,10 +8,10 @@ namespace VRCLocalization
     public class LocalizedInteractionText : LocalizedText
     {
 
-        private UdonSharpBehaviour[] ucs;
+        private UdonBehaviour[] ucs;
         void Start()
         {
-            ucs = GetComponents<UdonSharpBehaviour>();
+            ucs = GetComponents<UdonBehaviour>();
         }
 
         public override void OnLanguageChanged(string language)
@@ -22,7 +19,7 @@ namespace VRCLocalization
             base.OnLanguageChanged(language);
 
 
-            foreach (UdonSharpBehaviour uc in ucs)
+            foreach (UdonBehaviour uc in ucs)
             {
                 uc.InteractionText = GetTextToChanged(language) ?? uc.InteractionText;
             }
