@@ -1,12 +1,12 @@
 {
-  "name": "user.ikawaayumu.text-localization",
-  "displayName": "Text Components Localization",
-  "version": "1.0.2",
+  "name": "user.ikawaayumu.vrchat-localization",
+  "displayName": "VRChat Components Localization",
+  "version": "2.0.0",
   "author": {
     "name": "IkaWaAyuMu"
   },
   "unity": "2022.3",
-  "description": "Text localization for VRChat text components",
+  "description": "Localization for various unity components.",
   "category": "World",
   "vccDependencies": {
     "com.vrchat.worlds": {
